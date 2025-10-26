@@ -49,10 +49,10 @@ team_t team = {
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
-#define PACK(size, prealloc, alloc) (((unsigned)(size) & ~0x7) | (prealloc << 1) | (alloc))
+#define PACK(size, prealloc, alloc) (((unsigned)(size) & ~0x7u) | (prealloc << 1u) | (alloc))
 
-#define GET8(p) (*(size_t *)(p))              // 주소 값 읽기
-#define PUT8(p, val) (*(size_t *)(p) = (val)) // 주소 값 쓰기
+// #define GET8(p) (*(void *)(p))              // 주소 값 읽기
+// #define PUT8(p, val) (*(void *)(p) = (val)) // 주소 값 쓰기
 
 #define GET4(p) (*(unsigned int *)(p))
 #define PUT4(p, val) (*(unsigned int *)(p) = (val)) // 헤더에 값 쓰기
@@ -87,6 +87,7 @@ static void *root = NULL; // 루트 포인터 주소 만듦
 
 int mm_init(void)
 {
+    root = NULL;
     if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1)
         return -1;
 
@@ -101,12 +102,10 @@ int mm_init(void)
 
     return 0;
 }
-
 /*
  * mm_malloc - Allocate a block by incrementing the brk pointer.
  *     Always allocate a block whose size is a multiple of the alignment.
  */
-
 void *mm_malloc(size_t size)
 {
     /* todo : size 정렬 해야함*/
@@ -117,9 +116,9 @@ void *mm_malloc(size_t size)
     if (size == 0)
         return NULL;
 
-    size_t *bp;
+    void *bp;
     size_t asize;
-    if (size <= 2 * DSIZE)
+    if (size < MINSIZE)
         asize = MINSIZE;
     else
         asize = ALIGN(size + DSIZE);
@@ -162,7 +161,7 @@ static void *extend_heap(size_t words) // 임시완
 // bp 기준으로 PRED, SUCC 연결하는 함수
 static void link_free_ptr(void *bp) // 임시완
 {
-    size_t *tmp = root;
+    void *tmp = root;
     root = bp;
     *SUCC(bp) = tmp;
     *PRED(bp) = NULL;
@@ -189,7 +188,6 @@ static void remove_free_ptr(void *bp) // 임시완
 // free시 앞뒤 확인해서 free 블록 합치고 연결하는 함수
 static void *coalesce(void *bp) // 임시완
 {
-    size_t *tmp;
     size_t prev_alloc = GET_PALLOC(HDRP(bp));           // 이전 alloc 여부 확인
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp))); // 이후 alloc 여부 확인
     size_t size = GET_SIZE(HDRP(bp));
@@ -255,23 +253,27 @@ static void place(void *bp, size_t size)
 
     if (blocksize - size > MINSIZE) // 분할
     {
+        // 넣기
         PUT4(HDRP(bp), PACK(size, pre, 1));
         PUT4(FTRP(bp), PACK(size, pre, 1));
+        // 뒤 free만들기
         bp = NEXT_BLKP(bp);
         PUT4(HDRP(bp), PACK(blocksize - size, 1, 0));
         PUT4(FTRP(bp), PACK(blocksize - size, 1, 0));
         link_free_ptr(bp);
-        // 뒤 블록 prev_alloc 업데이트
-        set_next_palloc(bp, 0);
+        // 뒤뒤 블록 prev_alloc 업데이트
+        set_next_palloc(bp, 0); // 분할 했으니 다음 palloc 0넣어야함
     }
     else
     {
-        PUT4(HDRP(bp), PACK(blocksize, 0, 1));
-        PUT4(FTRP(bp), PACK(blocksize, 0, 1));
+        // 그냥 넣기
+        PUT4(HDRP(bp), PACK(blocksize, pre, 1));
+        PUT4(FTRP(bp), PACK(blocksize, pre, 1));
+        set_next_palloc(bp, 1); // 그냥 넣었으니 다음 palloc 1넣어야함
     }
-    // 걍 넣어
 }
 
+// 다음 블록의 palloc 비트 고치기
 static void set_next_palloc(void *bp, int pre_alloc)
 {
     char *newbp = NEXT_BLKP(bp);
@@ -284,16 +286,17 @@ static void set_next_palloc(void *bp, int pre_alloc)
         headbit &= ~0x2; // prev_alloc = 0
     PUT4(HDRP(newbp), headbit);
 }
-
 /*
  * mm_free - Freeing a block does nothing.
  */
 void mm_free(void *bp)
 {
+    if (bp == NULL)
+        return;
     size_t size = GET_SIZE(HDRP(bp));
-
-    PUT4(HDRP(bp), PACK(size, 0, 0));
-    PUT4(FTRP(bp), PACK(size, 0, 0));
+    unsigned int pre = GET_PALLOC(HDRP(bp));
+    PUT4(HDRP(bp), PACK(size, pre, 0));
+    PUT4(FTRP(bp), PACK(size, pre, 0));
     coalesce(bp);
 }
 

@@ -195,7 +195,6 @@ static void *coalesce(void *bp) // 임시완
     if (prev_alloc && next_alloc)
     {
         link_free_ptr(bp);
-        return bp;
     }
     else if (!prev_alloc && next_alloc) // 앞이 free
     {
@@ -251,7 +250,7 @@ static void place(void *bp, size_t size)
     size_t blocksize = GET_SIZE(HDRP(bp));
     size_t pre = GET_PALLOC(HDRP(bp));
 
-    if (blocksize - size > MINSIZE) // 분할
+    if (blocksize - size >= MINSIZE) // 분할
     {
         // 넣기
         PUT4(HDRP(bp), PACK(size, pre, 1));

@@ -49,7 +49,7 @@ team_t team = {
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 
-#define PACK(size, prealloc, alloc) (((unsigned)(size) & ~0x7u) | (prealloc << 1u) | (alloc))
+#define PACK(size, prealloc, alloc) (((size) & ~0x7) | (prealloc << 1) | (alloc))
 
 // #define GET8(p) (*(void *)(p))              // 주소 값 읽기
 // #define PUT8(p, val) (*(void *)(p) = (val)) // 주소 값 쓰기
@@ -97,7 +97,7 @@ int mm_init(void)
     PUT4(heap_listp + (3 * WSIZE), PACK(0, 0, 1));     /*Epilogue header*/
     heap_listp += (2 * WSIZE);
 
-    if (extend_heap(CHUNKSIZE / DSIZE) == NULL)
+    if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
         return -1;
 
     return 0;
@@ -130,7 +130,7 @@ void *mm_malloc(size_t size)
     }
 
     size_t extendsize = MAX(asize, CHUNKSIZE);
-    if ((bp = extend_heap(extendsize / DSIZE)) == NULL)
+    if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
         return NULL;
     place(bp, asize);
     return bp;
@@ -142,7 +142,7 @@ static void *extend_heap(size_t words) // 임시완
     char *bp;
     size_t size;
 
-    size = (words % 2) ? ((words + 1) * DSIZE) : (words * DSIZE);
+    size = (words % 2) ? ((words + 1) * WSIZE) : (words * WSIZE);
     if ((long)(bp = mem_sbrk(size)) == -1)
         return NULL;
 
@@ -234,13 +234,18 @@ static void *coalesce(void *bp) // 임시완
 static void *find_fit(size_t size) // 임시완
 {
     void *bp = root;
+    void *best = NULL;
+    size_t bestsize = (size_t)-1;
     while (bp) // NULL까지 반복
     {
-        if (size <= GET_SIZE(HDRP(bp)))
-            return bp;
+        if ((size <= GET_SIZE(HDRP(bp))) && (GET_SIZE(HDRP(bp)) < bestsize))
+        {
+            bestsize = GET_SIZE(HDRP(bp));
+            best = bp;
+        }
         bp = SUCC_GET(bp);
     }
-    return NULL;
+    return best;
 }
 
 static void place(void *bp, size_t size)

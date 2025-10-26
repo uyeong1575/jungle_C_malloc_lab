@@ -106,18 +106,15 @@ int mm_init(void)
  * mm_malloc - Allocate a block by incrementing the brk pointer.
  *     Always allocate a block whose size is a multiple of the alignment.
  */
+
 void *mm_malloc(size_t size)
 {
-    /* todo : size 정렬 해야함*/
-    /* find_fit 해야함
-        찾으면 place하고
-        못찾으면 extend로 만든다음 place
-    */
     if (size == 0)
         return NULL;
 
     void *bp;
     size_t asize;
+    // 필요한 size받으면 asize(필요한 전체 블록 size)로
     if (size < MINSIZE)
         asize = MINSIZE;
     else
@@ -130,6 +127,15 @@ void *mm_malloc(size_t size)
     }
 
     size_t extendsize = MAX(asize, CHUNKSIZE);
+    // extend시 이전 free block 확인해서 부족한 크기만큼 extend
+    void *last_bp = PREV_BLKP((char *)mem_heap_hi() + 1);
+    if (!GET_ALLOC(HDRP(last_bp)))
+    {
+        size_t lastsize = GET_SIZE(HDRP(last_bp));
+        size_t needsize = asize - lastsize;
+        extendsize = ALIGN(needsize);
+    }
+
     if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
         return NULL;
     place(bp, asize);
@@ -139,6 +145,10 @@ void *mm_malloc(size_t size)
 // 빈 heap 만들기
 static void *extend_heap(size_t words) // 임시완
 {
+
+    /* todo :extend시 이전 free block 확인해서
+    free면 부족한 크기만큼만 extend하도록 하기*/
+
     char *bp;
     size_t size;
 
@@ -248,22 +258,22 @@ static void *find_fit(size_t size) // 임시완
     return best;
 }
 
-static void place(void *bp, size_t size)
+static void place(void *bp, size_t asize)
 {
 
     remove_free_ptr(bp);
     size_t blocksize = GET_SIZE(HDRP(bp));
     size_t pre = GET_PALLOC(HDRP(bp));
 
-    if (blocksize - size >= MINSIZE) // 분할
+    if (blocksize - asize >= MINSIZE) // 분할
     {
         // 넣기
-        PUT4(HDRP(bp), PACK(size, pre, 1));
-        PUT4(FTRP(bp), PACK(size, pre, 1));
+        PUT4(HDRP(bp), PACK(asize, pre, 1));
+        PUT4(FTRP(bp), PACK(asize, pre, 1));
         // 뒤 free만들기
         bp = NEXT_BLKP(bp);
-        PUT4(HDRP(bp), PACK(blocksize - size, 1, 0));
-        PUT4(FTRP(bp), PACK(blocksize - size, 1, 0));
+        PUT4(HDRP(bp), PACK(blocksize - asize, 1, 0));
+        PUT4(FTRP(bp), PACK(blocksize - asize, 1, 0));
         link_free_ptr(bp);
         // 뒤뒤 블록 prev_alloc 업데이트
         set_next_palloc(bp, 0); // 분할 했으니 다음 palloc 0넣어야함

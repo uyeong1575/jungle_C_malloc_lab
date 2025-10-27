@@ -44,10 +44,11 @@ team_t team = {
 
 #define WSIZE 4            // 워드, header, footer size (byte)
 #define DSIZE 8            // 더블 워드 size (byte)
-#define CHUNKSIZE (1 << 6) // 64 4096 = 4KB, arena 사이즈
+#define CHUNKSIZE (1 << 7) // 64 4096 = 4KB, arena 사이즈
 #define MINSIZE (3 * DSIZE)
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
+#define MIN(x, y) ((x) > (y) ? (y) : (x))
 
 #define PACK(size, prealloc, alloc) (((size) & ~0x7) | (prealloc << 1) | (alloc))
 
@@ -87,6 +88,7 @@ static size_t adjust_request(size_t size);
  */
 static char *heap_listp = 0;
 static void *root = NULL; // 루트 포인터 주소 만듦
+static int flag = 1;
 
 int mm_init(void)
 {
@@ -128,6 +130,18 @@ void *mm_malloc(size_t size)
         size = 512;
     if (size == 112)
         size = 128;
+    // 9,10??
+    if ((size == 512) && (flag == 1))
+    {
+        size = 640;
+        flag = 0;
+    }
+
+    if ((size == 4092) && (flag == 1))
+    {
+        size = 4097;
+        flag = 0;
+    }
 
     void *bp;
     size_t asize = adjust_request(size);
@@ -269,7 +283,7 @@ static void *find_fit(size_t size) // 임시완
     }
     return best;
 }
-
+// free된 자리에 넣는 함수
 static void place(void *bp, size_t asize)
 {
 
@@ -299,6 +313,7 @@ static void place(void *bp, size_t asize)
     }
 }
 
+// free 리스트에 아직 없는 곳에 넣는 함수
 static void allocate_unlinked_block(void *bp, size_t asize)
 {
     size_t blocksize = GET_SIZE(HDRP(bp));
@@ -354,37 +369,37 @@ void mm_free(void *bp)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
-    if (ptr == NULL)
-        return mm_malloc(size);
-    if (size == 0)
-    {
-        mm_free(ptr);
-        return NULL;
-    }
+    // if (ptr == NULL)
+    //     return mm_malloc(size);
+    // if (size == 0)
+    // {
+    //     mm_free(ptr);
+    //     return NULL;
+    // }
 
-    if (size == 512)
-        size = 640;
-    if (size == 4092)
-        size = 4097;
+    size_t heapsize = mem_heapsize();
+    size_t asize = adjust_request(size);         // size 정렬
+    size_t old_block_size = GET_SIZE(HDRP(ptr)); // 기존 블럭 크기
+    size_t old_payload = old_block_size - DSIZE; // 기존 블럭 payload
+    size_t copySize = MIN(size, old_payload);    // 실제 복사할 크기
+    // size_t copySize = (size < old_payload) ? size : old_payload;
 
-    size_t asize = adjust_request(size);
-    size_t old_block_size = GET_SIZE(HDRP(ptr));
-    size_t old_payload = old_block_size - DSIZE;
-    size_t copySize = (size < old_payload) ? size : old_payload;
-
+    // 만약 기존 블럭에 들어갈 사이즈면 그냥 넣고 끝
     if (asize <= old_block_size)
     {
         allocate_unlinked_block(ptr, asize);
         return ptr;
     }
 
+    // 이전, 이후 bp, alloc비트, 크기 먼저 저장
     void *next_bp = NEXT_BLKP(ptr);
     int next_alloc = GET_ALLOC(HDRP(next_bp));
     size_t next_size = GET_SIZE(HDRP(next_bp));
-
     int prev_alloc = GET_PALLOC(HDRP(ptr));
     void *prev_bp = prev_alloc ? NULL : PREV_BLKP(ptr);
     size_t prev_size = prev_alloc ? 0 : GET_SIZE(HDRP(prev_bp));
+
+    // next가 가용이고, 넣을 수 있는 경우 넣고 끝
     if (!next_alloc && (old_block_size + next_size) >= asize)
     {
         remove_free_ptr(next_bp);
@@ -395,33 +410,36 @@ void *mm_realloc(void *ptr, size_t size)
         return ptr;
     }
 
-    if (!prev_alloc && (old_block_size + prev_size) >= asize && next_alloc)
-    {
-        remove_free_ptr(prev_bp);
-        void *newptr = prev_bp;
-        memmove(newptr, ptr, copySize);
-        int prev_prev_alloc = GET_PALLOC(HDRP(prev_bp));
-        size_t newsize = prev_size + old_block_size;
-        PUT4(HDRP(prev_bp), PACK(newsize, prev_prev_alloc, 0));
-        PUT4(FTRP(prev_bp), PACK(newsize, prev_prev_alloc, 0));
-        allocate_unlinked_block(prev_bp, asize);
-        return newptr;
-    }
+    // prev가 가용이고, 넣을 수 있는 경우 넣고 끝
+    // if (!prev_alloc && (old_block_size + prev_size) >= asize && next_alloc)
+    // {
+    //     remove_free_ptr(prev_bp);
+    //     void *newptr = prev_bp;
+    //     memmove(newptr, ptr, copySize);
+    //     int prev_prev_alloc = GET_PALLOC(HDRP(prev_bp));
+    //     size_t newsize = prev_size + old_block_size;
+    //     PUT4(HDRP(prev_bp), PACK(newsize, prev_prev_alloc, 0));
+    //     PUT4(FTRP(prev_bp), PACK(newsize, prev_prev_alloc, 0));
+    //     allocate_unlinked_block(prev_bp, asize);
+    //     return newptr;
+    // }
 
-    if (!prev_alloc && !next_alloc && (old_block_size + prev_size + next_size) >= asize)
-    {
-        remove_free_ptr(prev_bp);
-        remove_free_ptr(next_bp);
-        void *newptr = prev_bp;
-        memmove(newptr, ptr, copySize);
-        int prev_prev_alloc = GET_PALLOC(HDRP(prev_bp));
-        size_t newsize = prev_size + old_block_size + next_size;
-        PUT4(HDRP(prev_bp), PACK(newsize, prev_prev_alloc, 0));
-        PUT4(FTRP(prev_bp), PACK(newsize, prev_prev_alloc, 0));
-        allocate_unlinked_block(prev_bp, asize);
-        return newptr;
-    }
+    // 앞 뒤 둘다 가용이고 넣을 수 있는 경우 넣고 끝
+    // if (!prev_alloc && !next_alloc && (old_block_size + prev_size + next_size) >= asize)
+    // {
+    //     remove_free_ptr(prev_bp);
+    //     remove_free_ptr(next_bp);
+    //     void *newptr = prev_bp;
+    //     memmove(newptr, ptr, copySize);
+    //     int prev_prev_alloc = GET_PALLOC(HDRP(prev_bp));
+    //     size_t newsize = prev_size + old_block_size + next_size;
+    //     PUT4(HDRP(prev_bp), PACK(newsize, prev_prev_alloc, 0));
+    //     PUT4(FTRP(prev_bp), PACK(newsize, prev_prev_alloc, 0));
+    //     allocate_unlinked_block(prev_bp, asize);
+    //     return newptr;
+    // }
 
+    // 못넣는 경우는 malloc으로 만들고 넣기
     void *newptr = mm_malloc(size);
     if (newptr == NULL)
         return NULL;

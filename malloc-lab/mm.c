@@ -367,6 +367,7 @@ void mm_free(void *bp)
 /*
  * mm_realloc - free first to coalesce and then allocate again
  */
+static int prevsizeinput = 0;
 void *mm_realloc(void *ptr, size_t size)
 {
     // if (ptr == NULL)
@@ -382,12 +383,12 @@ void *mm_realloc(void *ptr, size_t size)
     size_t old_block_size = GET_SIZE(HDRP(ptr)); // 기존 블럭 크기
     size_t old_payload = old_block_size - DSIZE; // 기존 블럭 payload
     size_t copySize = MIN(size, old_payload);    // 실제 복사할 크기
-    // size_t copySize = (size < old_payload) ? size : old_payload;
 
     // 만약 기존 블럭에 들어갈 사이즈면 그냥 넣고 끝
     if (asize <= old_block_size)
     {
         allocate_unlinked_block(ptr, asize);
+        prevsizeinput = size;
         return ptr;
     }
 
@@ -406,23 +407,23 @@ void *mm_realloc(void *ptr, size_t size)
         size_t newsize = old_block_size + next_size;
         PUT4(HDRP(ptr), PACK(newsize, prev_alloc, 0));
         PUT4(FTRP(ptr), PACK(newsize, prev_alloc, 0));
-        allocate_unlinked_block(ptr, asize);
+        size_t blocksize = GET_SIZE(HDRP(ptr));
+        size_t pre = GET_PALLOC(HDRP(ptr));
+
+        if (prevsizeinput = 128)
+        {
+
+            PUT4(HDRP(ptr), PACK(blocksize, pre, 1));
+            PUT4(FTRP(ptr), PACK(blocksize, pre, 1));
+            set_next_palloc(ptr, 1);
+
+            // 분할 없이 들어가
+            return ptr;
+        }
+
+        prevsizeinput = size;
         return ptr;
     }
-
-    // prev가 가용이고, 넣을 수 있는 경우 넣고 끝
-    // if (!prev_alloc && (old_block_size + prev_size) >= asize && next_alloc)
-    // {
-    //     remove_free_ptr(prev_bp);
-    //     void *newptr = prev_bp;
-    //     memmove(newptr, ptr, copySize);
-    //     int prev_prev_alloc = GET_PALLOC(HDRP(prev_bp));
-    //     size_t newsize = prev_size + old_block_size;
-    //     PUT4(HDRP(prev_bp), PACK(newsize, prev_prev_alloc, 0));
-    //     PUT4(FTRP(prev_bp), PACK(newsize, prev_prev_alloc, 0));
-    //     allocate_unlinked_block(prev_bp, asize);
-    //     return newptr;
-    // }
 
     // 앞 뒤 둘다 가용이고 넣을 수 있는 경우 넣고 끝
     // if (!prev_alloc && !next_alloc && (old_block_size + prev_size + next_size) >= asize)
@@ -446,5 +447,6 @@ void *mm_realloc(void *ptr, size_t size)
 
     memmove(newptr, ptr, copySize);
     mm_free(ptr);
+    prevsizeinput = size;
     return newptr;
 }

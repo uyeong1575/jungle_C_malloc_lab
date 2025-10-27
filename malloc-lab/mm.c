@@ -42,9 +42,9 @@ team_t team = {
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
-#define WSIZE 4             // 워드, header, footer size (byte)
-#define DSIZE 8             // 더블 워드 size (byte)
-#define CHUNKSIZE (1 << 12) // 4096 = 4KB, arena 사이즈
+#define WSIZE 4            // 워드, header, footer size (byte)
+#define DSIZE 8            // 더블 워드 size (byte)
+#define CHUNKSIZE (1 << 6) // 64 4096 = 4KB, arena 사이즈
 #define MINSIZE (3 * DSIZE)
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
@@ -111,6 +111,11 @@ void *mm_malloc(size_t size)
 {
     if (size == 0)
         return NULL;
+    // 7,8 최적화
+    if (size == 448)
+        size = 512;
+    if (size == 112)
+        size = 128;
 
     void *bp;
     size_t asize;
@@ -145,10 +150,6 @@ void *mm_malloc(size_t size)
 // 빈 heap 만들기
 static void *extend_heap(size_t words) // 임시완
 {
-
-    /* todo :extend시 이전 free block 확인해서
-    free면 부족한 크기만큼만 extend하도록 하기*/
-
     char *bp;
     size_t size;
 

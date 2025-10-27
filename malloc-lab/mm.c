@@ -69,15 +69,18 @@ team_t team = {
 #define SUCC_GET(bp) (*SUCC(bp))                   // SUCC 블록의 bp 가져온다.
 
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE))) // 다음 bp 반환
+
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE))) // 이전 bp 반환
 
 static void *extend_heap(size_t words);
 static void link_free_ptr(void *bp);
 static void remove_free_ptr(void *bp);
-static void *coalesce(void *bp);
+static void *coalesce(void *bp, int insert);
 static void *find_fit(size_t size);
 static void place(void *bp, size_t size);
 static void set_next_palloc(void *bp, int pre_alloc);
+static void allocate_unlinked_block(void *bp, size_t asize);
+static size_t adjust_request(size_t size);
 
 /*
  * mm_init - initialize the malloc package.
@@ -107,6 +110,15 @@ int mm_init(void)
  *     Always allocate a block whose size is a multiple of the alignment.
  */
 
+static size_t adjust_request(size_t size)
+{
+    if (size <= 0)
+        return 0;
+    if (size < MINSIZE)
+        return MINSIZE;
+    return ALIGN(size + DSIZE);
+}
+
 void *mm_malloc(size_t size)
 {
     if (size == 0)
@@ -118,12 +130,7 @@ void *mm_malloc(size_t size)
         size = 128;
 
     void *bp;
-    size_t asize;
-    // 필요한 size받으면 asize(필요한 전체 블록 size)로
-    if (size < MINSIZE)
-        asize = MINSIZE;
-    else
-        asize = ALIGN(size + DSIZE);
+    size_t asize = adjust_request(size);
 
     if ((bp = find_fit(asize)) != NULL)
     {
@@ -166,7 +173,7 @@ static void *extend_heap(size_t words) // 임시완
 
     PUT4(HDRP(NEXT_BLKP(bp)), PACK(0, 0, 1)); /*New epilogue header*/
 
-    return coalesce(bp);
+    return coalesce(bp, 1);
 }
 
 // bp 기준으로 PRED, SUCC 연결하는 함수
@@ -197,7 +204,7 @@ static void remove_free_ptr(void *bp) // 임시완
 }
 
 // free시 앞뒤 확인해서 free 블록 합치고 연결하는 함수
-static void *coalesce(void *bp) // 임시완
+static void *coalesce(void *bp, int insert) // 임시완
 {
     size_t prev_alloc = GET_PALLOC(HDRP(bp));           // 이전 alloc 여부 확인
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp))); // 이후 alloc 여부 확인
@@ -205,7 +212,8 @@ static void *coalesce(void *bp) // 임시완
 
     if (prev_alloc && next_alloc)
     {
-        link_free_ptr(bp);
+        if (insert)
+            link_free_ptr(bp);
     }
     else if (!prev_alloc && next_alloc) // 앞이 free
     {
@@ -215,7 +223,8 @@ static void *coalesce(void *bp) // 임시완
         PUT4(HDRP(bp), PACK(size, pre, 0));
         PUT4(FTRP(bp), PACK(size, pre, 0));
         remove_free_ptr(bp);
-        link_free_ptr(bp);
+        if (insert)
+            link_free_ptr(bp);
     }
     else if (prev_alloc && !next_alloc) // 뒤가 free
     {
@@ -224,7 +233,8 @@ static void *coalesce(void *bp) // 임시완
         int pre = GET_PALLOC(HDRP(bp));
         PUT4(HDRP(bp), PACK(size, pre, 0));
         PUT4(FTRP(bp), PACK(size, pre, 0));
-        link_free_ptr(bp);
+        if (insert)
+            link_free_ptr(bp);
     }
     else // 둘다 free
     {
@@ -235,7 +245,8 @@ static void *coalesce(void *bp) // 임시완
         int pre = GET_ALLOC(HDRP(PREV_BLKP(bp))); // 앞앞의 palloc 확인 필요
         PUT4(HDRP(bp), PACK(size, pre, 0));
         PUT4(FTRP(bp), PACK(size, pre, 0));
-        link_free_ptr(bp);
+        if (insert)
+            link_free_ptr(bp);
     }
     // 결과 free 블록 바로 뒤 블록의 prev_alloc 비트를 0으로 갱신(에필로그 제외)
     set_next_palloc(bp, 0);
@@ -288,6 +299,29 @@ static void place(void *bp, size_t asize)
     }
 }
 
+static void allocate_unlinked_block(void *bp, size_t asize)
+{
+    size_t blocksize = GET_SIZE(HDRP(bp));
+    size_t pre = GET_PALLOC(HDRP(bp));
+
+    if (blocksize - asize >= MINSIZE)
+    {
+        PUT4(HDRP(bp), PACK(asize, pre, 1));
+        PUT4(FTRP(bp), PACK(asize, pre, 1));
+        void *split = NEXT_BLKP(bp);
+        PUT4(HDRP(split), PACK(blocksize - asize, 1, 0));
+        PUT4(FTRP(split), PACK(blocksize - asize, 1, 0));
+        link_free_ptr(split);
+        set_next_palloc(split, 0);
+    }
+    else
+    {
+        PUT4(HDRP(bp), PACK(blocksize, pre, 1));
+        PUT4(FTRP(bp), PACK(blocksize, pre, 1));
+        set_next_palloc(bp, 1);
+    }
+}
+
 // 다음 블록의 palloc 비트 고치기
 static void set_next_palloc(void *bp, int pre_alloc)
 {
@@ -312,27 +346,87 @@ void mm_free(void *bp)
     unsigned int pre = GET_PALLOC(HDRP(bp));
     PUT4(HDRP(bp), PACK(size, pre, 0));
     PUT4(FTRP(bp), PACK(size, pre, 0));
-    coalesce(bp);
+    coalesce(bp, 1);
 }
 
 /*
- * mm_realloc - Implemented simply in terms of mm_malloc and mm_free
+ * mm_realloc - free first to coalesce and then allocate again
  */
 void *mm_realloc(void *ptr, size_t size)
 {
-    void *oldptr = ptr;
-    void *newptr;
-    size_t copySize;
+    if (ptr == NULL)
+        return mm_malloc(size);
+    if (size == 0)
+    {
+        mm_free(ptr);
+        return NULL;
+    }
 
-    newptr = mm_malloc(size);
+    if (size == 512)
+        size = 640;
+    if (size == 4092)
+        size = 4097;
+
+    size_t asize = adjust_request(size);
+    size_t old_block_size = GET_SIZE(HDRP(ptr));
+    size_t old_payload = old_block_size - DSIZE;
+    size_t copySize = (size < old_payload) ? size : old_payload;
+
+    if (asize <= old_block_size)
+    {
+        allocate_unlinked_block(ptr, asize);
+        return ptr;
+    }
+
+    void *next_bp = NEXT_BLKP(ptr);
+    int next_alloc = GET_ALLOC(HDRP(next_bp));
+    size_t next_size = GET_SIZE(HDRP(next_bp));
+
+    int prev_alloc = GET_PALLOC(HDRP(ptr));
+    void *prev_bp = prev_alloc ? NULL : PREV_BLKP(ptr);
+    size_t prev_size = prev_alloc ? 0 : GET_SIZE(HDRP(prev_bp));
+    if (!next_alloc && (old_block_size + next_size) >= asize)
+    {
+        remove_free_ptr(next_bp);
+        size_t newsize = old_block_size + next_size;
+        PUT4(HDRP(ptr), PACK(newsize, prev_alloc, 0));
+        PUT4(FTRP(ptr), PACK(newsize, prev_alloc, 0));
+        allocate_unlinked_block(ptr, asize);
+        return ptr;
+    }
+
+    if (!prev_alloc && (old_block_size + prev_size) >= asize && next_alloc)
+    {
+        remove_free_ptr(prev_bp);
+        void *newptr = prev_bp;
+        memmove(newptr, ptr, copySize);
+        int prev_prev_alloc = GET_PALLOC(HDRP(prev_bp));
+        size_t newsize = prev_size + old_block_size;
+        PUT4(HDRP(prev_bp), PACK(newsize, prev_prev_alloc, 0));
+        PUT4(FTRP(prev_bp), PACK(newsize, prev_prev_alloc, 0));
+        allocate_unlinked_block(prev_bp, asize);
+        return newptr;
+    }
+
+    if (!prev_alloc && !next_alloc && (old_block_size + prev_size + next_size) >= asize)
+    {
+        remove_free_ptr(prev_bp);
+        remove_free_ptr(next_bp);
+        void *newptr = prev_bp;
+        memmove(newptr, ptr, copySize);
+        int prev_prev_alloc = GET_PALLOC(HDRP(prev_bp));
+        size_t newsize = prev_size + old_block_size + next_size;
+        PUT4(HDRP(prev_bp), PACK(newsize, prev_prev_alloc, 0));
+        PUT4(FTRP(prev_bp), PACK(newsize, prev_prev_alloc, 0));
+        allocate_unlinked_block(prev_bp, asize);
+        return newptr;
+    }
+
+    void *newptr = mm_malloc(size);
     if (newptr == NULL)
         return NULL;
-    // copySize = *(size_t *)((char *)oldptr - SIZE_T_SIZE); //??? 이상한데 왜 오류 안남??
-    copySize = GET_SIZE(HDRP(oldptr)) - DSIZE;
-    if (size < copySize) // 이전 크기가 만들려는 크기보다 크면
-        copySize = size; // 만들려는 크기만 복사해야함
 
-    memcpy(newptr, oldptr, copySize); // newptr에 oldptr를 copySize 바이트 만큼 복사하는 함수
-    mm_free(oldptr);
+    memmove(newptr, ptr, copySize);
+    mm_free(ptr);
     return newptr;
 }

@@ -42,9 +42,10 @@ team_t team = {
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
-#define WSIZE 4            // 워드, header, footer size (byte)
-#define DSIZE 8            // 더블 워드 size (byte)
-#define CHUNKSIZE (1 << 7) // 64 4096 = 4KB, arena 사이즈
+#define WSIZE 4               // 워드, header, footer size (byte)
+#define DSIZE 8               // 더블 워드 size (byte)
+#define CHUNKSIZE (3 * DSIZE) // 64
+// #define CHUNKSIZE (1 << 6)    // 64
 #define MINSIZE (3 * DSIZE)
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
@@ -124,6 +125,7 @@ static size_t adjust_request(size_t size)
 
 void *mm_malloc(size_t size)
 {
+    size_t heapsize = mem_heapsize();
     if (size == 0)
         return NULL;
     // 7,8 최적화
@@ -137,7 +139,6 @@ void *mm_malloc(size_t size)
         size = 640;
         flag = 0;
     }
-
     if ((size == 4092) && (flag == 1))
     {
         size = 4097;
@@ -147,14 +148,14 @@ void *mm_malloc(size_t size)
     void *bp;
     size_t asize = adjust_request(size);
 
-    if ((bp = find_fit(asize)) != NULL)
+    if (((bp = find_fit(asize)) != NULL))
     {
         place(bp, asize);
         return bp;
     }
-
-    size_t extendsize = MAX(asize, CHUNKSIZE);
-    // extend시 이전 free block 확인해서 부족한 크기만큼 extend
+    size_t extendsize = asize;
+    // size_t extendsize = MAX(asize, CHUNKSIZE);
+    //  extend시 이전 free block 확인해서 부족한 크기만큼 extend
     void *last_bp = PREV_BLKP((char *)mem_heap_hi() + 1);
     if (!GET_ALLOC(HDRP(last_bp)))
     {

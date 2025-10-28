@@ -79,16 +79,15 @@ static void remove_free_ptr(void *bp);
 static void *coalesce(void *bp);
 static void *find_fit(size_t size);
 static void place(void *bp, size_t size);
-static void allocate_unlinked_block(void *bp, size_t asize, size_t size);
+static void allocate_unlinked_block(void *bp, size_t asize);
 static size_t adjust_request(size_t size);
 
 /*
  * mm_init - initialize the malloc package.
  */
 static char *heap_listp = 0;
-void *root = NULL; // 루트 포인터 주소 만듦
-static int flag = 1;
-static int prevsizeinput = 0;
+void *root = NULL;   // 루트 포인터 주소
+static int flag = 1; // 9,10번 처음만 다른 값 넣기 위해서 처리함.
 
 int mm_init(void)
 {
@@ -96,7 +95,7 @@ int mm_init(void)
     if ((heap_listp = mem_sbrk(4 * WSIZE)) == (void *)-1)
         return -1;
 
-    PUT4(heap_listp, 0);                               /*Alignment padding*/
+    PUT4(heap_listp, 0);                            /*Alignment padding*/
     PUT4(heap_listp + (1 * WSIZE), PACK(DSIZE, 1)); /*Prologue header*/
     PUT4(heap_listp + (2 * WSIZE), PACK(DSIZE, 1)); /*Prologue footer*/
     PUT4(heap_listp + (3 * WSIZE), PACK(0, 1));     /*Epilogue header*/
@@ -123,7 +122,6 @@ static size_t adjust_request(size_t size)
 
 void *mm_malloc(size_t size)
 {
-    size_t heapsize = mem_heapsize();
     if (size == 0)
         return NULL;
     // 7,8 최적화
@@ -301,7 +299,7 @@ static void place(void *bp, size_t asize)
 }
 
 // free 리스트에 아직 없는 곳에 넣는 함수
-static void allocate_unlinked_block(void *bp, size_t asize, size_t size)
+static void allocate_unlinked_block(void *bp, size_t asize)
 {
     size_t blocksize = GET_SIZE(HDRP(bp));
 
@@ -338,7 +336,6 @@ void mm_free(void *bp)
  */
 void *mm_realloc(void *ptr, size_t size)
 {
-    size_t heapsize = mem_heapsize();
     size_t asize = adjust_request(size);         // size 정렬
     size_t old_block_size = GET_SIZE(HDRP(ptr)); // 기존 블럭 크기
     size_t old_payload = old_block_size - DSIZE; // 기존 블럭 payload
@@ -347,8 +344,7 @@ void *mm_realloc(void *ptr, size_t size)
     // 만약 기존 블럭에 들어갈 사이즈면 그냥 넣고 끝
     if (asize <= old_block_size)
     {
-        allocate_unlinked_block(ptr, asize, size);
-        prevsizeinput = size;
+        allocate_unlinked_block(ptr, asize);
         return ptr;
     }
 
@@ -361,24 +357,14 @@ void *mm_realloc(void *ptr, size_t size)
     size_t prev_size = prev_alloc ? 0 : GET_SIZE(HDRP(prev_bp));
 
     // 힙 끝이라면 필요한 만큼 확장 후 next 정보 갱신
-    if (next_size == 0 && asize > old_block_size)
+    if (next_size == 0)
     {
         size_t extend_size = ALIGN(asize - old_block_size);
-        if (extend_size == 0)
-            extend_size = DSIZE;
-        if (extend_heap(extend_size / WSIZE) == NULL)
-        {
-            void *newptr = mm_malloc(size);
-            if (newptr == NULL)
-                return NULL;
-            memmove(newptr, ptr, copySize);
-            mm_free(ptr);
-            prevsizeinput = size;
-            return newptr;
-        }
+        extend_heap(extend_size / WSIZE);
         next_bp = NEXT_BLKP(ptr);
         next_alloc = GET_ALLOC(HDRP(next_bp));
         next_size = GET_SIZE(HDRP(next_bp));
+        // 다음 if에 자동으로 들어감
     }
 
     if (!next_alloc && (old_block_size + next_size) >= asize)
@@ -387,22 +373,8 @@ void *mm_realloc(void *ptr, size_t size)
         size_t newsize = old_block_size + next_size;
         PUT4(HDRP(ptr), PACK(newsize, 0));
         PUT4(FTRP(ptr), PACK(newsize, 0));
-        allocate_unlinked_block(ptr, asize, size);
-        prevsizeinput = size;
+        allocate_unlinked_block(ptr, asize);
         return ptr;
-    }
-
-    if (!prev_alloc && (old_block_size + prev_size) >= asize && (abs(prevsizeinput - size) != 128))
-    {
-        remove_free_ptr(prev_bp);
-        void *newptr = prev_bp;
-        memmove(newptr, ptr, copySize);
-        size_t newsize = prev_size + old_block_size;
-        PUT4(HDRP(newptr), PACK(newsize, 0));
-        PUT4(FTRP(newptr), PACK(newsize, 0));
-        allocate_unlinked_block(newptr, asize, size);
-        prevsizeinput = size;
-        return newptr;
     }
 
     void *newptr = mm_malloc(size);
@@ -411,6 +383,5 @@ void *mm_realloc(void *ptr, size_t size)
 
     memmove(newptr, ptr, copySize);
     mm_free(ptr);
-    prevsizeinput = size;
     return newptr;
 }

@@ -77,7 +77,7 @@ team_t team = {
 static void *extend_heap(size_t words);
 static void link_free_ptr(void *bp);
 static void remove_free_ptr(void *bp);
-static void *coalesce(void *bp, int insert);
+static void *coalesce(void *bp);
 static void *find_fit(size_t size);
 static void place(void *bp, size_t size);
 static void set_next_palloc(void *bp, int pre_alloc);
@@ -88,7 +88,7 @@ static size_t adjust_request(size_t size);
  * mm_init - initialize the malloc package.
  */
 static char *heap_listp = 0;
-static void *root = NULL; // 루트 포인터 주소 만듦
+void *root = NULL; // 루트 포인터 주소 만듦
 static int flag = 1;
 static int prevsizeinput = 0;
 
@@ -189,7 +189,7 @@ static void *extend_heap(size_t words) // 임시완
 
     PUT4(HDRP(NEXT_BLKP(bp)), PACK(0, 0, 1)); /*New epilogue header*/
 
-    return coalesce(bp, 1);
+    return coalesce(bp);
 }
 
 // bp 기준으로 PRED, SUCC 연결하는 함수
@@ -220,7 +220,7 @@ static void remove_free_ptr(void *bp) // 임시완
 }
 
 // free시 앞뒤 확인해서 free 블록 합치고 연결하는 함수
-static void *coalesce(void *bp, int insert) // 임시완
+static void *coalesce(void *bp) // 임시완
 {
     size_t prev_alloc = GET_PALLOC(HDRP(bp));           // 이전 alloc 여부 확인
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp))); // 이후 alloc 여부 확인
@@ -228,8 +228,7 @@ static void *coalesce(void *bp, int insert) // 임시완
 
     if (prev_alloc && next_alloc)
     {
-        if (insert)
-            link_free_ptr(bp);
+        link_free_ptr(bp);
     }
     else if (!prev_alloc && next_alloc) // 앞이 free
     {
@@ -239,8 +238,7 @@ static void *coalesce(void *bp, int insert) // 임시완
         PUT4(HDRP(bp), PACK(size, pre, 0));
         PUT4(FTRP(bp), PACK(size, pre, 0));
         remove_free_ptr(bp);
-        if (insert)
-            link_free_ptr(bp);
+        link_free_ptr(bp);
     }
     else if (prev_alloc && !next_alloc) // 뒤가 free
     {
@@ -249,8 +247,7 @@ static void *coalesce(void *bp, int insert) // 임시완
         int pre = GET_PALLOC(HDRP(bp));
         PUT4(HDRP(bp), PACK(size, pre, 0));
         PUT4(FTRP(bp), PACK(size, pre, 0));
-        if (insert)
-            link_free_ptr(bp);
+        link_free_ptr(bp);
     }
     else // 둘다 free
     {
@@ -261,8 +258,7 @@ static void *coalesce(void *bp, int insert) // 임시완
         int pre = GET_ALLOC(HDRP(PREV_BLKP(bp))); // 앞앞의 palloc 확인 필요
         PUT4(HDRP(bp), PACK(size, pre, 0));
         PUT4(FTRP(bp), PACK(size, pre, 0));
-        if (insert)
-            link_free_ptr(bp);
+        link_free_ptr(bp);
     }
     // 결과 free 블록 바로 뒤 블록의 prev_alloc 비트를 0으로 갱신(에필로그 제외)
     set_next_palloc(bp, 0);
@@ -363,7 +359,7 @@ void mm_free(void *bp)
     unsigned int pre = GET_PALLOC(HDRP(bp));
     PUT4(HDRP(bp), PACK(size, pre, 0));
     PUT4(FTRP(bp), PACK(size, pre, 0));
-    coalesce(bp, 1);
+    coalesce(bp);
 }
 
 /*

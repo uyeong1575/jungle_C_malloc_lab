@@ -24,11 +24,11 @@
  ********************************************************/
 team_t team = {
     /* Team name */
-    "ateam",
+    "HAHAHA",
     /* First member's full name */
-    "Harry Bovik",
+    "uyeong",
     /* First member's email address */
-    "bovik@cs.cmu.edu",
+    "secret",
     /* Second member's full name (leave blank if none) */
     "",
     /* Second member's email address (leave blank if none) */
@@ -42,19 +42,15 @@ team_t team = {
 
 #define SIZE_T_SIZE (ALIGN(sizeof(size_t)))
 
-#define WSIZE 4               // 워드, header, footer size (byte)
-#define DSIZE 8               // 더블 워드 size (byte)
-#define CHUNKSIZE (3 * DSIZE) // 64
-// #define CHUNKSIZE (1 << 6)    // 64
+#define WSIZE 4 // 워드, header, footer size (byte)
+#define DSIZE 8 // 더블 워드 size (byte)
+#define CHUNKSIZE (3 * DSIZE)
 #define MINSIZE (3 * DSIZE)
 
 #define MAX(x, y) ((x) > (y) ? (x) : (y))
 #define MIN(x, y) ((x) > (y) ? (y) : (x))
 
 #define PACK(size, alloc) (((size) & ~0x7) | (alloc))
-
-// #define GET8(p) (*(void *)(p))              // 주소 값 읽기
-// #define PUT8(p, val) (*(void *)(p) = (val)) // 주소 값 쓰기
 
 #define GET4(p) (*(unsigned int *)(p))
 #define PUT4(p, val) (*(unsigned int *)(p) = (val)) // 헤더에 값 쓰기
@@ -70,7 +66,6 @@ team_t team = {
 #define SUCC_GET(bp) (*SUCC(bp))                   // SUCC 블록의 bp 가져온다.
 
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE))) // 다음 bp 반환
-
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE))) // 이전 bp 반환
 
 static void *extend_heap(size_t words);
@@ -78,16 +73,14 @@ static void link_free_ptr(void *bp);
 static void remove_free_ptr(void *bp);
 static void *coalesce(void *bp);
 static void *find_fit(size_t size);
-static void place(void *bp, size_t size);
-static void allocate_unlinked_block(void *bp, size_t asize);
+static void place(void *bp, size_t size, int nonfree);
 static size_t adjust_request(size_t size);
 
 /*
  * mm_init - initialize the malloc package.
  */
 static char *heap_listp = 0;
-void *root = NULL;   // 루트 포인터 주소
-static int flag = 1; // 9,10번 처음만 다른 값 넣기 위해서 처리함.
+void *root = NULL; // 루트 포인터 주소
 
 int mm_init(void)
 {
@@ -110,16 +103,6 @@ int mm_init(void)
  * mm_malloc - Allocate a block by incrementing the brk pointer.
  *     Always allocate a block whose size is a multiple of the alignment.
  */
-
-static size_t adjust_request(size_t size)
-{
-    if (size <= 0)
-        return 0;
-    if (size < MINSIZE)
-        return MINSIZE;
-    return ALIGN(size + DSIZE);
-}
-
 void *mm_malloc(size_t size)
 {
     if (size == 0)
@@ -129,29 +112,18 @@ void *mm_malloc(size_t size)
         size = 512;
     if (size == 112)
         size = 128;
-    // 9,10??
-    if ((size == 512) && (flag == 1))
-    {
-        size = 640;
-        flag = 0;
-    }
-    if ((size == 4092) && (flag == 1))
-    {
-        size = 4097;
-        flag = 0;
-    }
 
     void *bp;
     size_t asize = adjust_request(size);
 
     if (((bp = find_fit(asize)) != NULL))
     {
-        place(bp, asize);
+        place(bp, asize, 0);
         return bp;
     }
+
     size_t extendsize = asize;
-    // size_t extendsize = MAX(asize, CHUNKSIZE);
-    //  extend시 이전 free block 확인해서 부족한 크기만큼 extend
+    // extend시 이전 free block 확인해서 부족한 크기만큼 extend
     void *last_bp = PREV_BLKP((char *)mem_heap_hi() + 1);
     if (!GET_ALLOC(HDRP(last_bp)))
     {
@@ -162,11 +134,11 @@ void *mm_malloc(size_t size)
 
     if ((bp = extend_heap(extendsize / WSIZE)) == NULL)
         return NULL;
-    place(bp, asize);
+    place(bp, asize, 0);
     return bp;
 }
 
-// 빈 heap 만들기
+// 뒤에 빈 heap 만들고 병합 가능하면 함
 static void *extend_heap(size_t words) // 임시완
 {
     char *bp;
@@ -180,7 +152,6 @@ static void *extend_heap(size_t words) // 임시완
     PUT4(FTRP(bp), PACK(size, 0)); /*footer*/
     *PRED(bp) = NULL;
     *SUCC(bp) = NULL;
-
     PUT4(HDRP(NEXT_BLKP(bp)), PACK(0, 1)); /*New epilogue header*/
 
     return coalesce(bp);
@@ -272,52 +243,40 @@ static void *find_fit(size_t size) // 임시완
     }
     return best;
 }
+
 // free된 자리에 넣는 함수
-static void place(void *bp, size_t asize)
+static void place(void *bp, size_t asize, int nonfree)
 {
 
-    remove_free_ptr(bp);
+    if (nonfree != 1) // realloc시 place할 때는 payload를 건들면 안되서 free하면 안됨.
+        remove_free_ptr(bp);
     size_t blocksize = GET_SIZE(HDRP(bp));
 
     if (blocksize - asize >= MINSIZE) // 분할
     {
-        // 넣기
         PUT4(HDRP(bp), PACK(asize, 1));
         PUT4(FTRP(bp), PACK(asize, 1));
-        // 뒤 free만들기
         bp = NEXT_BLKP(bp);
         PUT4(HDRP(bp), PACK(blocksize - asize, 0));
         PUT4(FTRP(bp), PACK(blocksize - asize, 0));
         link_free_ptr(bp);
     }
-    else
+    else // 그냥 넣기
     {
-        // 그냥 넣기
         PUT4(HDRP(bp), PACK(blocksize, 1));
         PUT4(FTRP(bp), PACK(blocksize, 1));
     }
 }
 
-// free 리스트에 아직 없는 곳에 넣는 함수
-static void allocate_unlinked_block(void *bp, size_t asize)
+static size_t adjust_request(size_t size)
 {
-    size_t blocksize = GET_SIZE(HDRP(bp));
-
-    if ((blocksize - asize >= MINSIZE))
-    {
-        PUT4(HDRP(bp), PACK(asize, 1));
-        PUT4(FTRP(bp), PACK(asize, 1));
-        void *split = NEXT_BLKP(bp);
-        PUT4(HDRP(split), PACK(blocksize - asize, 0));
-        PUT4(FTRP(split), PACK(blocksize - asize, 0));
-        link_free_ptr(split);
-    }
-    else
-    {
-        PUT4(HDRP(bp), PACK(blocksize, 1));
-        PUT4(FTRP(bp), PACK(blocksize, 1));
-    }
+    if (size <= 0)
+        return 0;
+    if (size < MINSIZE)
+        return MINSIZE;
+    return ALIGN(size + DSIZE);
 }
+
 /*
  * mm_free - Freeing a block does nothing.
  */
@@ -334,27 +293,24 @@ void mm_free(void *bp)
 /*
  * mm_realloc - free first to coalesce and then allocate again
  */
+
+// realloc시
+// 만약 지금 보는 블럭이 마지막이면, 뒤에 필요한 만큼만 늘려서 그 자리에 채우기
+// 아니면 그냥 넣기
 void *mm_realloc(void *ptr, size_t size)
 {
-    size_t asize = adjust_request(size);         // size 정렬
+    size_t asize = adjust_request(size);         // 입력 size 정렬
     size_t old_block_size = GET_SIZE(HDRP(ptr)); // 기존 블럭 크기
-    size_t old_payload = old_block_size - DSIZE; // 기존 블럭 payload
-    size_t copySize = MIN(size, old_payload);    // 실제 복사할 크기
+    void *next_bp = NEXT_BLKP(ptr);              // 다음 블록 확인
+    int next_alloc = GET_ALLOC(HDRP(next_bp));   // 다음 블록 alloc 여부 확인
+    size_t next_size = GET_SIZE(HDRP(next_bp));  // 다음 블록 크기 확인
 
     // 만약 기존 블럭에 들어갈 사이즈면 그냥 넣고 끝
     if (asize <= old_block_size)
     {
-        allocate_unlinked_block(ptr, asize);
+        place(ptr, asize, 1);
         return ptr;
     }
-
-    void *next_bp = NEXT_BLKP(ptr);
-    int next_alloc = GET_ALLOC(HDRP(next_bp));
-    size_t next_size = GET_SIZE(HDRP(next_bp));
-
-    void *prev_bp = PREV_BLKP(ptr);
-    int prev_alloc = GET_ALLOC(HDRP(prev_bp));
-    size_t prev_size = prev_alloc ? 0 : GET_SIZE(HDRP(prev_bp));
 
     // 힙 끝이라면 필요한 만큼 확장 후 next 정보 갱신
     if (next_size == 0)
@@ -367,21 +323,19 @@ void *mm_realloc(void *ptr, size_t size)
         // 다음 if에 자동으로 들어감
     }
 
+    // 다음이 비어 있고 합쳐서 넣을 수 있으면 그렇게 함
     if (!next_alloc && (old_block_size + next_size) >= asize)
     {
         remove_free_ptr(next_bp);
         size_t newsize = old_block_size + next_size;
         PUT4(HDRP(ptr), PACK(newsize, 0));
         PUT4(FTRP(ptr), PACK(newsize, 0));
-        allocate_unlinked_block(ptr, asize);
+        place(ptr, asize, 1);
         return ptr;
     }
 
     void *newptr = mm_malloc(size);
-    if (newptr == NULL)
-        return NULL;
-
-    memmove(newptr, ptr, copySize);
+    memmove(newptr, ptr, size); // mmcmp는 겹치면 안됨, 하지만 mmmove는 겹쳐도 됨.
     mm_free(ptr);
     return newptr;
 }
